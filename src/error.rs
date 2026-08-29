@@ -8,9 +8,6 @@ pub enum YouModError {
     #[error("app.asar not found at {0}")]
     AsarNotFound(String),
 
-    #[error("Proxy DLL build failed — version.dll not found at expected path")]
-    ProxyDllNotBuilt,
-
     #[error("Patch '{name}': code pattern not found in any candidate file. This Wand version may not be supported.")]
     PatchNotMatched { name: String },
 

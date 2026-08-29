@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 pub struct WandInstallation {
     pub root_dir: PathBuf,
     pub exe_path: PathBuf,
+    pub exe_backup_path: PathBuf,
     pub asar_path: PathBuf,
     pub asar_backup_path: PathBuf,
     pub asar_unpacked_backup_path: PathBuf,
@@ -57,10 +58,33 @@ pub fn find_old_installations() -> Vec<WandInstallation> {
     all.into_iter().skip(1).collect()
 }
 
-fn find_latest_app_dir(brand_dir: &Path, brand: &str) -> Option<WandInstallation> {
-    let exe_name = format!("{}.exe", brand);
+/// Resolves the packaged Electron executable inside an `app-*` directory.
+///
+/// The app is named `Wand.exe` even when installed under the `WeMod` folder
+/// (`WeMod.exe` is only a small Squirrel stub that spawns it). Prefer
+/// `Wand.exe`, falling back to `{brand}.exe` for any legacy layout.
+fn resolve_exe(app_dir: &Path, brand: &str) -> Option<PathBuf> {
+    let wand = app_dir.join("Wand.exe");
+    if wand.is_file() {
+        return Some(wand);
+    }
+    let branded = app_dir.join(format!("{}.exe", brand));
+    if branded.is_file() {
+        return Some(branded);
+    }
+    None
+}
 
-    let mut best: Option<(PathBuf, Vec<u64>)> = None;
+fn exe_backup_for(exe_path: &Path) -> PathBuf {
+    let name = exe_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("Wand.exe");
+    exe_path.with_file_name(format!("{}.backup", name))
+}
+
+fn find_latest_app_dir(brand_dir: &Path, brand: &str) -> Option<WandInstallation> {
+    let mut best: Option<(PathBuf, PathBuf, Vec<u64>)> = None;
 
     for entry in std::fs::read_dir(brand_dir).ok()? {
         let entry = entry.ok()?;
@@ -75,33 +99,30 @@ fn find_latest_app_dir(brand_dir: &Path, brand: &str) -> Option<WandInstallation
         let sort_key = parse_version_sort_key(version_str);
 
         let app_dir = entry.path();
-        let exe_path = app_dir.join(&exe_name);
-
-        if !exe_path.is_file() {
+        let Some(exe_path) = resolve_exe(&app_dir, brand) else {
             continue;
-        }
+        };
 
         match &best {
-            Some((_, best_key)) if sort_key <= *best_key => continue,
+            Some((_, _, best_key)) if sort_key <= *best_key => continue,
             _ => {}
         }
 
         let resources = app_dir.join("resources");
-        let asar_path = resources.join("app.asar");
-
-        if !asar_path.is_file() {
+        if !resources.join("app.asar").is_file() {
             continue;
         }
 
-        best = Some((app_dir.clone(), sort_key));
+        best = Some((app_dir, exe_path, sort_key));
     }
 
-    best.map(|(app_dir, _)| {
-        let exe_path = app_dir.join(&exe_name);
+    best.map(|(app_dir, exe_path, _)| {
+        let exe_backup_path = exe_backup_for(&exe_path);
         let resources = app_dir.join("resources");
         WandInstallation {
             root_dir: app_dir,
             exe_path,
+            exe_backup_path,
             asar_path: resources.join("app.asar"),
             asar_backup_path: resources.join("app.asar.backup"),
             asar_unpacked_backup_path: resources.join("app.asar.unpacked.backup"),
@@ -112,7 +133,6 @@ fn find_latest_app_dir(brand_dir: &Path, brand: &str) -> Option<WandInstallation
 
 /// 查找某个品牌目录下的所有 app-* 安装
 fn find_all_app_dirs(brand_dir: &Path, brand: &str) -> Vec<WandInstallation> {
-    let exe_name = format!("{}.exe", brand);
     let mut installs = Vec::new();
 
     let dir_iter = match std::fs::read_dir(brand_dir) {
@@ -132,20 +152,20 @@ fn find_all_app_dirs(brand_dir: &Path, brand: &str) -> Vec<WandInstallation> {
         }
 
         let app_dir = entry.path();
-        let exe_path = app_dir.join(&exe_name);
-
-        if !exe_path.is_file() {
+        let Some(exe_path) = resolve_exe(&app_dir, brand) else {
             continue;
-        }
+        };
 
         let resources = app_dir.join("resources");
         if !resources.join("app.asar").is_file() {
             continue;
         }
 
+        let exe_backup_path = exe_backup_for(&exe_path);
         installs.push(WandInstallation {
             root_dir: app_dir.clone(),
             exe_path,
+            exe_backup_path,
             asar_path: resources.join("app.asar"),
             asar_backup_path: resources.join("app.asar.backup"),
             asar_unpacked_backup_path: resources.join("app.asar.unpacked.backup"),

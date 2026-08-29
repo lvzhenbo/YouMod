@@ -1,8 +1,8 @@
 use crate::detector::WandInstallation;
 use crate::error::{Result, YouModError};
+use crate::fuse;
 use crate::patcher;
 use crate::patches::PATCHES;
-use crate::proxy_dll;
 use asar_rust as asar;
 use asar_rust::filesystem::FilesystemEntry;
 use std::fs;
@@ -122,38 +122,56 @@ pub fn apply_patches(install: &WandInstallation, config: &PatchConfig) -> Result
 
     let result = patcher::patch_js_files(&unpacked, filtered.as_slice())?;
 
+    let mut applied = result.applied;
+    let failed = result.failed;
+
+    // Wand.exe sets DependentLoadFlags=0x0800 (LOAD_LIBRARY_SEARCH_SYSTEM32),
+    // which confines static DLL search to System32, so a local version.dll
+    // proxy is never loaded. Disable Electron's embedded ASAR integrity
+    // validation by flipping the fuse byte directly inside the exe instead.
+    match fuse::patch_asar_integrity_fuse(&install.exe_path, &install.exe_backup_path)? {
+        fuse::FuseOutcome::Disabled => {
+            applied.push("ASAR 完整性校验（fuse）".to_string());
+        }
+        fuse::FuseOutcome::AlreadyDisabled => {}
+        fuse::FuseOutcome::NotFound => {
+            return Err(YouModError::Other(anyhow::anyhow!(
+                "在 {} 中未找到 Electron fuse sentinel，无法禁用 ASAR 完整性校验",
+                install.exe_path.display()
+            )));
+        }
+    }
+
     repack_asar(&unpacked, &install.asar_path)?;
 
-    proxy_dll::write_proxy_dll(&install.root_dir)?;
-
-    Ok(PatchStats {
-        applied: result.applied,
-        failed: result.failed,
-    })
+    Ok(PatchStats { applied, failed })
 }
 
-pub fn is_patched(install: &WandInstallation) -> bool {
-    if !install.asar_backup_path.exists() {
+fn files_differ(current: &std::path::Path, backup: &std::path::Path) -> bool {
+    if !current.exists() || !backup.exists() {
         return false;
     }
-    // Fast path: compare file sizes — patched ASAR almost always differs in size
-    let Ok(current_meta) = std::fs::metadata(&install.asar_path) else {
+    let Ok(current_meta) = std::fs::metadata(current) else {
         return false;
     };
-    let Ok(backup_meta) = std::fs::metadata(&install.asar_backup_path) else {
+    let Ok(backup_meta) = std::fs::metadata(backup) else {
         return false;
     };
     if current_meta.len() != backup_meta.len() {
         return true;
     }
-    // Slow path: sizes match (unlikely), fall back to full byte comparison
-    let Ok(current) = std::fs::read(&install.asar_path) else {
+    let Ok(current_bytes) = std::fs::read(current) else {
         return false;
     };
-    let Ok(backup) = std::fs::read(&install.asar_backup_path) else {
+    let Ok(backup_bytes) = std::fs::read(backup) else {
         return false;
     };
-    current != backup
+    current_bytes != backup_bytes
+}
+
+pub fn is_patched(install: &WandInstallation) -> bool {
+    files_differ(&install.asar_path, &install.asar_backup_path)
+        || files_differ(&install.exe_path, &install.exe_backup_path)
 }
 
 pub fn restore(install: &WandInstallation) -> Result<()> {
@@ -164,7 +182,7 @@ pub fn restore(install: &WandInstallation) -> Result<()> {
             source: e,
         })?;
     }
-    proxy_dll::remove_proxy_dll(&install.root_dir)?;
+    fuse::restore_exe(&install.exe_path, &install.exe_backup_path)?;
     Ok(())
 }
 
