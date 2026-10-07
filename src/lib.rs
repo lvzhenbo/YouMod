@@ -1,3 +1,5 @@
+pub mod asar_integrity;
+pub mod aux_patch;
 pub mod detector;
 pub mod error;
 pub mod fuse;

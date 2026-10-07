@@ -9,6 +9,9 @@ pub struct WandInstallation {
     pub asar_path: PathBuf,
     pub asar_backup_path: PathBuf,
     pub asar_unpacked_backup_path: PathBuf,
+    /// Auxiliary service executable, when this build ships one.
+    pub aux_path: Option<PathBuf>,
+    pub aux_backup_path: Option<PathBuf>,
     pub brand_name: String,
 }
 
@@ -75,12 +78,35 @@ fn resolve_exe(app_dir: &Path, brand: &str) -> Option<PathBuf> {
     None
 }
 
-fn exe_backup_for(exe_path: &Path) -> PathBuf {
-    let name = exe_path
+fn backup_for(path: &Path) -> PathBuf {
+    let name = path
         .file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or("Wand.exe");
-    exe_path.with_file_name(format!("{}.backup", name))
+        .unwrap_or("file");
+    path.with_file_name(format!("{}.backup", name))
+}
+
+/// Resolves the auxiliary service executable shipped in the unpacked asar tree.
+///
+/// The file name carries a per-build prefix, so it is matched by suffix the way
+/// Wand-Enhancer's `*AuxiliaryService.exe` search does.
+fn resolve_aux(app_dir: &Path) -> Option<PathBuf> {
+    let directory = app_dir
+        .join("resources")
+        .join("app.asar.unpacked")
+        .join("static")
+        .join("unpacked")
+        .join("auxiliary");
+
+    std::fs::read_dir(directory)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with("AuxiliaryService.exe"))
+        })
 }
 
 fn find_latest_app_dir(brand_dir: &Path, brand: &str) -> Option<WandInstallation> {
@@ -117,8 +143,10 @@ fn find_latest_app_dir(brand_dir: &Path, brand: &str) -> Option<WandInstallation
     }
 
     best.map(|(app_dir, exe_path, _)| {
-        let exe_backup_path = exe_backup_for(&exe_path);
+        let exe_backup_path = backup_for(&exe_path);
         let resources = app_dir.join("resources");
+        let aux_path = resolve_aux(&app_dir);
+        let aux_backup_path = aux_path.as_deref().map(backup_for);
         WandInstallation {
             root_dir: app_dir,
             exe_path,
@@ -126,6 +154,8 @@ fn find_latest_app_dir(brand_dir: &Path, brand: &str) -> Option<WandInstallation
             asar_path: resources.join("app.asar"),
             asar_backup_path: resources.join("app.asar.backup"),
             asar_unpacked_backup_path: resources.join("app.asar.unpacked.backup"),
+            aux_path,
+            aux_backup_path,
             brand_name: brand.to_string(),
         }
     })
@@ -161,7 +191,9 @@ fn find_all_app_dirs(brand_dir: &Path, brand: &str) -> Vec<WandInstallation> {
             continue;
         }
 
-        let exe_backup_path = exe_backup_for(&exe_path);
+        let exe_backup_path = backup_for(&exe_path);
+        let aux_path = resolve_aux(&app_dir);
+        let aux_backup_path = aux_path.as_deref().map(backup_for);
         installs.push(WandInstallation {
             root_dir: app_dir.clone(),
             exe_path,
@@ -169,6 +201,8 @@ fn find_all_app_dirs(brand_dir: &Path, brand: &str) -> Vec<WandInstallation> {
             asar_path: resources.join("app.asar"),
             asar_backup_path: resources.join("app.asar.backup"),
             asar_unpacked_backup_path: resources.join("app.asar.unpacked.backup"),
+            aux_path,
+            aux_backup_path,
             brand_name: brand.to_string(),
         });
     }

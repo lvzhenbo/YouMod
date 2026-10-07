@@ -3,8 +3,7 @@ pub mod components;
 use crate::detector::{WandInstallation, detect_wand};
 use crate::orchestrator::{self, PatchConfig};
 use crate::ui::components::*;
-use gpui::*;
-use gpui_component::{
+use gpui_kit::component::{
     ActiveTheme as _, Disableable, Root, Theme, ThemeMode,
     button::{Button, ButtonVariants},
     checkbox::Checkbox,
@@ -12,6 +11,7 @@ use gpui_component::{
     scroll::ScrollableElement,
     v_flex,
 };
+use gpui_kit::*;
 use std::sync::mpsc;
 
 type AppResult = Result<orchestrator::PatchStats, crate::error::YouModError>;
@@ -315,7 +315,7 @@ impl Render for MainWindow {
 }
 
 pub fn run_app() {
-    let app = gpui_platform::application().with_assets(gpui_component_assets::Assets);
+    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
     app.run(move |cx| {
         init(cx);
         Theme::change(ThemeMode::Dark, None, cx);

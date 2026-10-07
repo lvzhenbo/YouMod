@@ -1,3 +1,5 @@
+use crate::asar_integrity;
+use crate::aux_patch::{self, AuxOutcome};
 use crate::detector::WandInstallation;
 use crate::error::{Result, YouModError};
 use crate::fuse;
@@ -20,17 +22,28 @@ pub struct CleanupStats {
 
 use std::os::windows::process::CommandExt;
 
-pub fn kill_wand(install: &WandInstallation) {
-    let exe_stem = install
-        .exe_path
-        .file_stem()
-        .map(|n| n.to_str().unwrap_or(""))
-        .unwrap_or("");
+fn kill_image(image: &str) {
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let _ = std::process::Command::new("taskkill")
-        .args(["/F", "/IM", &format!("{}.exe", exe_stem)])
+        .args(["/F", "/IM", image])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
+}
+
+pub fn kill_wand(install: &WandInstallation) {
+    if let Some(name) = install.exe_path.file_name().and_then(|n| n.to_str()) {
+        kill_image(name);
+    }
+
+    // The auxiliary service keeps its own exe open while a trainer is running.
+    if let Some(name) = install
+        .aux_path
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .and_then(|name| name.to_str())
+    {
+        kill_image(name);
+    }
 }
 
 fn copy_directory(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
@@ -144,7 +157,65 @@ pub fn apply_patches(install: &WandInstallation, config: &PatchConfig) -> Result
 
     repack_asar(&unpacked, &install.asar_path)?;
 
+    // 12.61 additionally bakes the original app.asar header SHA256 into
+    // Wand.exe's `ElectronAsar\Integrity` resource, which WandAuxiliaryService
+    // re-validates. The repack above made that value stale, so refresh it now
+    // that app.asar is final. Pre-12.61 builds have no such resource.
+    match asar_integrity::patch_integrity_resource(&install.exe_path, &install.asar_path)? {
+        asar_integrity::IntegrityOutcome::Patched => {
+            applied.push("ASAR 完整性资源（hash）".to_string());
+        }
+        asar_integrity::IntegrityOutcome::AlreadyCorrect => {}
+        asar_integrity::IntegrityOutcome::NotFound => {}
+    }
+
+    applied.extend(neutralize_auxiliary_service(install)?);
+
     Ok(PatchStats { applied, failed })
+}
+
+/// Neutralises the two auxiliary-service checks this tool can address, backing
+/// the file up first so `restore` can put it back.
+///
+/// The third check, the archive hash baked into `Wand.exe`, is handled by
+/// [`asar_integrity`]. Without these, Wand 12.61 refuses every privileged
+/// auxiliary command — trainer injection included — with
+/// `client_integrity_failed`, because patching `Wand.exe` invalidates its
+/// signature and disabling the asar fuse looks like tampering to the service.
+fn neutralize_auxiliary_service(install: &WandInstallation) -> Result<Vec<String>> {
+    let (Some(aux), Some(aux_backup)) = (&install.aux_path, &install.aux_backup_path) else {
+        return Ok(Vec::new());
+    };
+
+    if aux_backup.exists() {
+        // Re-patch from the pristine copy so the stub offsets are recomputed
+        // against the original IL, never against an already-stubbed file.
+        fs::copy(aux_backup, aux).map_err(|e| YouModError::Io {
+            path: aux.display().to_string(),
+            source: e,
+        })?;
+    } else if aux.exists() {
+        fs::copy(aux, aux_backup).map_err(|e| YouModError::Io {
+            path: aux_backup.display().to_string(),
+            source: e,
+        })?;
+    } else {
+        return Ok(Vec::new());
+    }
+
+    let mut applied = Vec::new();
+
+    match aux_patch::neutralize_trust_check(aux)? {
+        AuxOutcome::Patched(count) => applied.push(format!("辅助服务信任校验（{count} 处）")),
+        AuxOutcome::AlreadyPatched | AuxOutcome::Absent => {}
+    }
+
+    match aux_patch::neutralize_fuse_integrity_check(aux)? {
+        AuxOutcome::Patched(count) => applied.push(format!("辅助服务 asar-fuse 复查（{count} 处）")),
+        AuxOutcome::AlreadyPatched | AuxOutcome::Absent => {}
+    }
+
+    Ok(applied)
 }
 
 fn files_differ(current: &std::path::Path, backup: &std::path::Path) -> bool {
@@ -172,6 +243,10 @@ fn files_differ(current: &std::path::Path, backup: &std::path::Path) -> bool {
 pub fn is_patched(install: &WandInstallation) -> bool {
     files_differ(&install.asar_path, &install.asar_backup_path)
         || files_differ(&install.exe_path, &install.exe_backup_path)
+        || match (&install.aux_path, &install.aux_backup_path) {
+            (Some(aux), Some(aux_backup)) => files_differ(aux, aux_backup),
+            _ => false,
+        }
 }
 
 pub fn restore(install: &WandInstallation) -> Result<()> {
@@ -183,6 +258,14 @@ pub fn restore(install: &WandInstallation) -> Result<()> {
         })?;
     }
     fuse::restore_exe(&install.exe_path, &install.exe_backup_path)?;
+    if let (Some(aux), Some(aux_backup)) = (&install.aux_path, &install.aux_backup_path)
+        && aux_backup.exists()
+    {
+        fs::copy(aux_backup, aux).map_err(|e| YouModError::Io {
+            path: aux.display().to_string(),
+            source: e,
+        })?;
+    }
     Ok(())
 }
 

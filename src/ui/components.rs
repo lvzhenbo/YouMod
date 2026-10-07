@@ -1,5 +1,5 @@
-use gpui::*;
-use gpui_component::v_flex;
+use gpui_kit::component::{Theme, v_flex};
+use gpui_kit::*;
 
 #[derive(Clone)]
 pub struct LogEntry {
@@ -17,11 +17,11 @@ pub enum LogLevel {
 #[derive(IntoElement)]
 pub struct LogList {
     entries: Vec<LogEntry>,
-    theme: gpui_component::Theme,
+    theme: Theme,
 }
 
 impl LogList {
-    pub fn new(entries: Vec<LogEntry>, theme: gpui_component::Theme) -> Self {
+    pub fn new(entries: Vec<LogEntry>, theme: Theme) -> Self {
         Self { entries, theme }
     }
 }
