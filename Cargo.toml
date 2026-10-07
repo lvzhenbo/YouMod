@@ -14,6 +14,12 @@ path = "src/lib.rs"
 gpui-kit = "0.7.1"
 asar-rust = "0.1.0"
 cildec = "0.1.0"
+oxc_allocator = "0.153.0"
+oxc_ast = "0.153.0"
+oxc_ast_visit = "0.153.0"
+oxc_parser = "0.153.0"
+oxc_span = "0.153.0"
+oxc_syntax = "0.153.0"
 sha2 = "0.11.0"
 regex = { version = "1.13.1", default-features = false, features = [
     "std",

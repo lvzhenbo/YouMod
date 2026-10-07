@@ -462,7 +462,10 @@ mod tests {
     ///
     /// Ignored by default because CI has no Wand install; point
     /// `YOUMOD_WAND_AUX` at the real `WandAuxiliaryService.exe` and run
-    /// `cargo test -- --ignored`. A copy is patched, never the given file.
+    /// `cargo test -- --ignored`. A copy is patched, never the given file, and
+    /// the binary has to be pristine — an already-patched install is skipped,
+    /// since there would be nothing left to find. Wand keeps one at
+    /// `WandAuxiliaryService.exe.backup` after the first patch.
     #[test]
     #[ignore = "needs a real Wand auxiliary service; set YOUMOD_WAND_AUX"]
     fn real_auxiliary_service_anchors_are_found_and_stubbed() {
@@ -474,8 +477,20 @@ mod tests {
 
         let tmp = TempDir::new().unwrap();
         let copy = tmp.path().join("WandAuxiliaryService.exe");
-        fs::copy(&source, &copy).unwrap();
 
+        // The check needs a pristine binary; an already-patched one has nothing
+        // left to find. Probe a throwaway copy so the one below stays untouched.
+        let probe = tmp.path().join("probe.exe");
+        fs::copy(&source, &probe).unwrap();
+        if neutralize_trust_check(&probe).unwrap() == AuxOutcome::AlreadyPatched {
+            eprintln!(
+                "{} is already patched - point YOUMOD_WAND_AUX at a pristine copy",
+                source.display()
+            );
+            return;
+        }
+
+        fs::copy(&source, &copy).unwrap();
         let before = fs::read(&copy).unwrap();
 
         let AuxOutcome::Patched(trust_calls) = neutralize_trust_check(&copy).unwrap() else {

@@ -1,8 +1,10 @@
 pub mod asar_integrity;
+pub mod asar_layout;
 pub mod aux_patch;
 pub mod detector;
 pub mod error;
 pub mod fuse;
+pub mod js_edit;
 pub mod orchestrator;
 pub mod patcher;
 pub mod patches;

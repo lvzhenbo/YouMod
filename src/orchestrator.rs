@@ -1,4 +1,5 @@
 use crate::asar_integrity;
+use crate::asar_layout::{self, PackedLayout};
 use crate::aux_patch::{self, AuxOutcome};
 use crate::detector::WandInstallation;
 use crate::error::{Result, YouModError};
@@ -110,6 +111,11 @@ pub fn apply_patches(install: &WandInstallation, config: &PatchConfig) -> Result
 
     let unpacked = unpacked_dir_for(&install.asar_path)?;
 
+    // Read the archive's packed/unpacked split before anything is written: the
+    // repack has to reproduce it, or Wand's ~116 MB of native binaries get
+    // inlined into app.asar.
+    let layout = PackedLayout::of(&install.asar_path)?;
+
     // If unpacked backup exists, restore pristine unpacked dir
     if install.asar_unpacked_backup_path.exists() {
         copy_directory(&install.asar_unpacked_backup_path, &unpacked)?;
@@ -155,7 +161,11 @@ pub fn apply_patches(install: &WandInstallation, config: &PatchConfig) -> Result
         }
     }
 
-    repack_asar(&unpacked, &install.asar_path)?;
+    asar_layout::write_archive(&unpacked, &install.asar_path, &layout)?;
+    // The extraction wrote every entry, including the ones that live inside the
+    // archive; drop those again so the unpacked directory holds exactly what
+    // the header says it holds.
+    asar_layout::prune_extracted_copies(&unpacked, &install.asar_path)?;
 
     // 12.61 additionally bakes the original app.asar header SHA256 into
     // Wand.exe's `ElectronAsar\Integrity` resource, which WandAuxiliaryService
@@ -256,6 +266,15 @@ pub fn restore(install: &WandInstallation) -> Result<()> {
             path: install.asar_path.display().to_string(),
             source: e,
         })?;
+    }
+    // The restored archive expects its unpacked files on disk, and patching
+    // prunes that directory down to exactly those files, so it has to be put
+    // back too.
+    if install.asar_unpacked_backup_path.exists() {
+        copy_directory(
+            &install.asar_unpacked_backup_path,
+            &unpacked_dir_for(&install.asar_path)?,
+        )?;
     }
     fuse::restore_exe(&install.exe_path, &install.exe_backup_path)?;
     if let (Some(aux), Some(aux_backup)) = (&install.aux_path, &install.aux_backup_path)
@@ -390,21 +409,5 @@ fn extract_asar(install: &WandInstallation, dest: &std::path::Path) -> Result<()
             }
         }
     }
-    Ok(())
-}
-
-fn repack_asar(unpacked_dir: &std::path::Path, dest_asar: &std::path::Path) -> Result<()> {
-    let options = asar::CreateOptions {
-        dot: false,
-        ordering: None,
-        unpack: Some(r"^static[/\\]unpacked.*$".to_string()),
-        unpack_dir: None,
-    };
-    asar::create_package_with_options(unpacked_dir, dest_asar, options).map_err(|e| {
-        YouModError::AsarOp {
-            op: "repack",
-            source: e.into(),
-        }
-    })?;
     Ok(())
 }
