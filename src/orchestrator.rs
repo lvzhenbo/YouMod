@@ -133,9 +133,13 @@ pub fn apply_patches(install: &WandInstallation, config: &PatchConfig) -> Result
 
     let filtered: Vec<&crate::patches::JsPatch> = PATCHES
         .iter()
-        .filter(|p| {
-            (p.kind == crate::patches::PatchKind::ProSpoof && config.pro)
-                || (p.kind == crate::patches::PatchKind::DisableUpdates && config.disable_updates)
+        .filter(|p| match p.kind {
+            crate::patches::PatchKind::ProSpoof => config.pro,
+            crate::patches::PatchKind::DisableUpdates => config.disable_updates,
+            // 12.70's native tophat service stalls its dial-in past the
+            // launcher's deadline whenever Wand.exe has been repacked, so this
+            // has to accompany every patch run.
+            crate::patches::PatchKind::TophatTimeout => true,
         })
         .collect();
 

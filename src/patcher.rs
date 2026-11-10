@@ -227,6 +227,10 @@ mod tests {
 
     const UPDATE_BUNDLE: &str = r#"registerHandler("ACTION_CHECK_FOR_UPDATE",(e=>expectUpdateFeedUrl(e,(e=>{let t=e.updateInfo.url}))))"#;
 
+    /// Mirrors the trainer launch options in Wand 12.70's `app-*.bundle.js`.
+    const TOPHAT_BUNDLE: &str =
+        r#"const a={connectTimeout:45e3,loadTimeout:9e4,trainerArgs:{gameVersion:e.gameVersion}};"#;
+
     #[test]
     fn applies_every_patch_to_mock_bundles() {
         let tmp = TempDir::new().unwrap();
@@ -235,11 +239,12 @@ mod tests {
         create_test_js_file(unpacked, "index.js", UPDATE_BUNDLE);
         create_test_js_file(unpacked, "app-1234.bundle.js", ACCOUNT_BUNDLE);
         create_test_js_file(unpacked, "overlay-5678.bundle.js", REDUCER_BUNDLE);
+        create_test_js_file(unpacked, "app-timeout.bundle.js", TOPHAT_BUNDLE);
 
         let result = patch_js_files(unpacked, &all_patches()).unwrap();
 
         assert_eq!(result.failed, Vec::<String>::new());
-        assert_eq!(result.applied.len(), 6);
+        assert_eq!(result.applied.len(), 7);
 
         let bundle = fs::read_to_string(unpacked.join("app-1234.bundle.js")).unwrap();
         assert!(bundle.contains(concat!(
@@ -258,6 +263,9 @@ mod tests {
 
         let index = fs::read_to_string(unpacked.join("index.js")).unwrap();
         assert!(index.contains("e=>null"));
+
+        let timeout = fs::read_to_string(unpacked.join("app-timeout.bundle.js")).unwrap();
+        assert!(timeout.contains("connectTimeout:18e4,loadTimeout:18e4"));
     }
 
     #[test]
@@ -288,12 +296,18 @@ mod tests {
         create_test_js_file(unpacked, "index.js", UPDATE_BUNDLE);
         create_test_js_file(unpacked, "app-1234.bundle.js", ACCOUNT_BUNDLE);
         create_test_js_file(unpacked, "overlay-5678.bundle.js", REDUCER_BUNDLE);
+        create_test_js_file(unpacked, "app-timeout.bundle.js", TOPHAT_BUNDLE);
 
         patch_js_files(unpacked, &all_patches()).unwrap();
-        let once: Vec<String> = ["index.js", "app-1234.bundle.js", "overlay-5678.bundle.js"]
-            .iter()
-            .map(|name| fs::read_to_string(unpacked.join(name)).unwrap())
-            .collect();
+        let once: Vec<String> = [
+            "index.js",
+            "app-1234.bundle.js",
+            "overlay-5678.bundle.js",
+            "app-timeout.bundle.js",
+        ]
+        .iter()
+        .map(|name| fs::read_to_string(unpacked.join(name)).unwrap())
+        .collect();
 
         let result = patch_js_files(unpacked, &all_patches()).unwrap();
         assert_eq!(
@@ -302,9 +316,14 @@ mod tests {
             "second run must report success"
         );
 
-        for (name, before) in ["index.js", "app-1234.bundle.js", "overlay-5678.bundle.js"]
-            .iter()
-            .zip(once)
+        for (name, before) in [
+            "index.js",
+            "app-1234.bundle.js",
+            "overlay-5678.bundle.js",
+            "app-timeout.bundle.js",
+        ]
+        .iter()
+        .zip(once)
         {
             assert_eq!(
                 fs::read_to_string(unpacked.join(name)).unwrap(),
@@ -323,7 +342,7 @@ mod tests {
 
         let result = patch_js_files(unpacked, &all_patches()).unwrap();
         assert_eq!(result.applied.len(), 0);
-        assert_eq!(result.failed.len(), 6);
+        assert_eq!(result.failed.len(), 7);
     }
 
     #[test]

@@ -291,7 +291,7 @@ struct AnchorFinder<'n> {
 
 impl<'ast> VisitJs<'ast> for AnchorFinder<'_> {
     fn visit_string_literal(&mut self, node: &StringLiteral<'ast>) {
-        if self.end.is_none() && node.value.as_str() == self.anchor {
+        if self.end.is_none() && node.value.as_str() == Some(self.anchor) {
             self.end = Some(node.span.end);
         }
         walk_string_literal(self, node);

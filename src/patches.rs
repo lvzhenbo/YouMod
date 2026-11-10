@@ -13,6 +13,8 @@ use std::sync::LazyLock;
 pub enum PatchKind {
     ProSpoof,
     DisableUpdates,
+    /// Widens the launcher's trainer-session deadline; needed on every run.
+    TophatTimeout,
 }
 
 /// Marks a bundle that already carries one of our Pro payloads.
@@ -43,6 +45,13 @@ pub const DISABLE_NATIVE_PAIRING_BODY: &str =
 /// The update-check handler's patched form, which no longer matches
 /// [`PatchOp::ReplaceText`]'s pattern and so needs its own marker.
 pub const DISABLE_UPDATES_MARKER: &str = "expectUpdateFeedUrl(e,(e=>null))";
+
+/// Wand 12.70's native tophat service re-validates the desktop binary and,
+/// once `Wand.exe` has been repacked (which invalidates its Authenticode
+/// signature), stalls its session dial-in by ~60 s. That overshoots the
+/// launcher's hardcoded deadline, so the trainer never attaches; widening the
+/// deadline is the only lever left on the JavaScript side.
+pub const TOPHAT_TIMEOUT_MARKER: &str = "connectTimeout:18e4";
 
 pub enum PatchOp {
     /// Rewrites the last top-level `return` of `method`.
@@ -152,6 +161,22 @@ pub static PATCHES: LazyLock<Vec<JsPatch>> = LazyLock::new(|| {
                 single_match: true,
             },
         },
+        JsPatch {
+            name: "Tophat connect timeout",
+            kind: PatchKind::TophatTimeout,
+            candidate_files: &[],
+            // The hint has to survive patching so a second run recognises the
+            // widened values instead of reporting the patch as absent.
+            search_hints: &["connectTimeout:"],
+            payload_marker: Some(TOPHAT_TIMEOUT_MARKER),
+            op: PatchOp::ReplaceText {
+                target: LazyLock::new(|| {
+                    Regex::new(r"connectTimeout:45e3,loadTimeout:9e4").unwrap()
+                }),
+                replacement: r"connectTimeout:18e4,loadTimeout:18e4",
+                single_match: true,
+            },
+        },
     ]
 });
 
@@ -229,6 +254,30 @@ mod tests {
             .find(|patch| patch.kind == PatchKind::DisableUpdates)
             .unwrap();
         assert_eq!(patch.candidate_files, &["index.js"]);
+    }
+
+    #[test]
+    fn tophat_timeout_regex_matches_once() {
+        let patch = PATCHES
+            .iter()
+            .find(|patch| patch.kind == PatchKind::TophatTimeout)
+            .unwrap();
+        let PatchOp::ReplaceText {
+            target,
+            replacement,
+            ..
+        } = &patch.op
+        else {
+            panic!("the tophat timeout patch should be a text replacement");
+        };
+
+        assert_eq!(*replacement, r"connectTimeout:18e4,loadTimeout:18e4");
+        assert_eq!(patch.payload_marker, Some(TOPHAT_TIMEOUT_MARKER));
+
+        let js = r#"},connectTimeout:45e3,loadTimeout:9e4,trainerArgs:{gameVersion:e.gameVersion"#;
+        assert!(target.is_match(js));
+        assert_eq!(target.find_iter(js).count(), 1);
+        assert_eq!(target.find_iter(replacement).count(), 0);
     }
 
     #[test]
